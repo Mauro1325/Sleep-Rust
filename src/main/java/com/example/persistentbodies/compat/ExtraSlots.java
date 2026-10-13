@@ -1,8 +1,10 @@
 package com.example.persistentbodies.compat;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BiPredicate;
 import com.example.persistentbodies.curios.CuriosBridge;
 import com.mojang.logging.LogUtils;
@@ -34,8 +36,8 @@ public final class ExtraSlots {
     private ExtraSlots() { }
 
     /**
-     * Offers every non-empty extra stack of the player to {@code sink} (key, copy of the stack; return false when the
-     * body is full). Nothing is removed from the player here.
+     * Offers every Curios slot (including empty ones) and every non-empty BlockZ extra to {@code sink} (key, copy of
+     * the stack; return false when the body is full). Nothing is removed from the player here.
      *
      * @return the actions that remove the accepted stacks from the player. Run them only after the body exists, so a
      *         failure can never lose items.
@@ -43,6 +45,7 @@ public final class ExtraSlots {
     public static List<Runnable> collect(ServerPlayer player, BiPredicate<String, ItemStack> sink) {
         List<Runnable> removals = new ArrayList<>();
         List<CuriosBridge.SlotRef> curios = new ArrayList<>(CuriosBridge.listSlots(player));
+        Set<String> mirroredCurios = new HashSet<>();
 
         if (BlockZBridge.isUsable()) {
             for (int slot = 0; slot < BlockZBridge.CAP_SLOTS; slot++) {
@@ -61,7 +64,7 @@ public final class ExtraSlots {
                     if (ref.index() == 0 && ref.identifier().equals(mirror)
                             && ItemStack.isSameItemSameTags(ref.stack(), stack)) {
                         removals.add(() -> ref.handler().setStackInSlot(ref.index(), ItemStack.EMPTY));
-                        it.remove();
+                        mirroredCurios.add(CURIOS + ref.identifier() + ":" + ref.index());
                         break;
                     }
                 }
@@ -72,9 +75,12 @@ public final class ExtraSlots {
         int curiosMoved = 0;
         for (CuriosBridge.SlotRef ref : curios) {
             ItemStack stack = ref.stack();
-            if (stack.isEmpty()) continue;
-            curiosWithItems++;
-            if (!sink.test(CURIOS + ref.identifier() + ":" + ref.index(), stack.copy())) continue;
+            String key = CURIOS + ref.identifier() + ":" + ref.index();
+            boolean mirrored = mirroredCurios.contains(key);
+            if (!stack.isEmpty() && !mirrored) curiosWithItems++;
+            ItemStack bodyStack = mirrored ? ItemStack.EMPTY : stack.copy();
+            if (!sink.test(key, bodyStack)) continue;
+            if (stack.isEmpty() || mirrored) continue;
             curiosMoved++;
             removals.add(() -> ref.handler().setStackInSlot(ref.index(), ItemStack.EMPTY));
         }

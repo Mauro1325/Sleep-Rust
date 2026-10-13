@@ -66,7 +66,8 @@ public class CorpseScreen extends AbstractContainerScreen<CorpseMenu> {
     }
 
     private int looterPanelHeight() {
-        return (CorpseMenu.LOOTER_EXTRA_Y - CorpseMenu.LOOTER_EXTRA_PANEL_Y) + menu.getLooterCuriosRows() * 18 + 6;
+        return (CorpseMenu.LOOTER_EXTRA_Y - CorpseMenu.LOOTER_EXTRA_PANEL_Y)
+                + menu.getLooterCuriosRows() * 18 + 6;
     }
 
     private int extraPanelWidth() {
@@ -102,7 +103,8 @@ public class CorpseScreen extends AbstractContainerScreen<CorpseMenu> {
             g.drawString(font, Component.literal("Accesorios"), CorpseMenu.WIDTH + 8, 30, TEXT, false);
         }
         if (looterExtrasVisible()) {
-            g.drawString(font, Component.literal("Tus accesorios"), CorpseMenu.WIDTH + 8, CorpseMenu.LOOTER_EXTRA_PANEL_Y + 6, TEXT, false);
+            g.drawString(font, Component.literal("Tus accesorios"), CorpseMenu.WIDTH + 8,
+                    CorpseMenu.LOOTER_EXTRA_PANEL_Y + 6, TEXT, false);
         }
     }
 
@@ -113,7 +115,8 @@ public class CorpseScreen extends AbstractContainerScreen<CorpseMenu> {
         if (!outside) return false;
         int x0 = left + CorpseMenu.WIDTH + 2;
         if (extrasVisible() && inRect(mouseX, mouseY, x0, top, extraPanelWidth(), extraPanelHeight())) return false;
-        if (looterExtrasVisible() && inRect(mouseX, mouseY, x0, top + CorpseMenu.LOOTER_EXTRA_PANEL_Y, looterPanelWidth(), looterPanelHeight())) return false;
+        if (looterExtrasVisible() && inRect(mouseX, mouseY, x0, top + CorpseMenu.LOOTER_EXTRA_PANEL_Y,
+                looterPanelWidth(), looterPanelHeight())) return false;
         return true;
     }
 

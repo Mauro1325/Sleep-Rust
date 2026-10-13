@@ -33,6 +33,7 @@ import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.phys.AABB;
 import com.example.persistentbodies.storage.CorpseSavedData;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
@@ -43,9 +44,11 @@ import net.minecraft.world.MenuProvider;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraftforge.network.NetworkHooks;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -69,6 +72,8 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
     private static final EntityDataAccessor<String> SKIN_SIGNATURE = SynchedEntityData
             .defineId(PlayerCorpseEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<Boolean> CURIOS_SUPPORT = SynchedEntityData
+            .defineId(PlayerCorpseEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Boolean> STORED_INVISIBLE = SynchedEntityData
             .defineId(PlayerCorpseEntity.class, EntityDataSerializers.BOOLEAN);
     // Worn armor is mirrored into synched data so every client can render it in
     // real time.
@@ -101,6 +106,7 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
     // PlayerConnectionHandler).
     private float health = 20.0F;
     private float maxHealth = 20.0F;
+    private final List<MobEffectInstance> storedEffects = new ArrayList<>();
     private boolean dying;
     private int hurtFlash; // client-side: ticks left of the red "hit" tint
     // Hotbar slot the player had selected at logout: the item in it is the "main hand" (totems!).
@@ -235,13 +241,22 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
 
     /** Adds an extra stack under {@code key}. @return false when the body is full (the stack was not stored) */
     public boolean addExtra(String key, ItemStack stack) {
-        int limit = Math.min(MAX_EXTRAS, CorpseConfig.MAX_EXTRA_SLOTS.get());
-        if (extraKeys.size() >= limit)
+        if (extraKeys.size() >= MAX_EXTRAS)
+            return false;
+        if (!stack.isEmpty() && countStoredExtraItems() >= CorpseConfig.MAX_EXTRA_SLOTS.get())
             return false;
         extraKeys.add(key);
         items.setItem(VANILLA_SLOTS + extraKeys.size() - 1, stack);
         setCuriosSupport(true);
         return true;
+    }
+
+    private int countStoredExtraItems() {
+        int count = 0;
+        for (int i = 0; i < extraKeys.size(); i++)
+            if (!items.getItem(VANILLA_SLOTS + i).isEmpty())
+                count++;
+        return count;
     }
 
     public static ListTag writeKeys(List<String> keys) {
@@ -357,11 +372,62 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         tag.put("ExtraKeys", writeKeys(extraKeys));
         tag.putFloat("Health", health);
         tag.putFloat("MaxHealth", maxHealth);
+        tag.put("Effects", writeEffects(storedEffects));
         tag.putInt("Regen", regenTicks);
         tag.putInt("Fire", fireResistTicks);
         tag.putInt("AbsTicks", absorptionTicks);
         tag.putFloat("Abs", absorption);
         return tag;
+    }
+
+    private static ListTag writeEffects(Collection<MobEffectInstance> effects) {
+        ListTag list = new ListTag();
+        for (MobEffectInstance effect : effects)
+            list.add(effect.save(new CompoundTag()));
+        return list;
+    }
+
+    private void readEffects(ListTag list) {
+        storedEffects.clear();
+        for (int i = 0; i < list.size(); i++) {
+            MobEffectInstance effect = MobEffectInstance.load(list.getCompound(i));
+            if (effect != null)
+                storedEffects.add(effect);
+        }
+        syncStoredInvisibility();
+    }
+
+    public void setStoredEffects(Collection<MobEffectInstance> effects) {
+        storedEffects.clear();
+        for (MobEffectInstance effect : effects)
+            storedEffects.add(new MobEffectInstance(effect));
+        syncStoredInvisibility();
+    }
+
+    public List<MobEffectInstance> getStoredEffects() {
+        List<MobEffectInstance> effects = new ArrayList<>(storedEffects.size());
+        for (MobEffectInstance effect : storedEffects)
+            effects.add(new MobEffectInstance(effect));
+        return effects;
+    }
+
+    public boolean hasStoredInvisibility() {
+        return entityData.get(STORED_INVISIBLE);
+    }
+
+    private void syncStoredInvisibility() {
+        boolean invisible = false;
+        for (MobEffectInstance effect : storedEffects) {
+            if (effect.getEffect() == MobEffects.INVISIBILITY && effect.getDuration() > 0) {
+                invisible = true;
+                break;
+            }
+        }
+        entityData.set(STORED_INVISIBLE, invisible);
+    }
+
+    public void setAbsorptionState(float amount) {
+        absorption = Math.max(0.0F, amount);
     }
 
     /** Called right after the body is registered in the SavedData (logout). */
@@ -410,12 +476,16 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         if (player.distanceToSqr(this) > 64.0D)
             return InteractionResult.CONSUME;
         List<String> keys = getExtraKeys();
+        List<com.example.persistentbodies.menu.CorpseMenu.CurioSlot> looterCurios =
+                com.example.persistentbodies.menu.CorpseMenu.looterCurios(player);
         NetworkHooks.openScreen((net.minecraft.server.level.ServerPlayer) player, this, buf -> {
             buf.writeVarInt(getId());
             buf.writeVarInt(keys.size());
             for (String key : keys)
                 buf.writeUtf(key);
-            buf.writeVarInt(com.example.persistentbodies.menu.CorpseMenu.looterCurios(player).size());
+            buf.writeVarInt(looterCurios.size());
+            for (var curio : looterCurios)
+                buf.writeUtf(curio.key());
         });
         return InteractionResult.CONSUME;
     }
@@ -440,6 +510,7 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         entityData.define(SKIN_VALUE, "");
         entityData.define(SKIN_SIGNATURE, "");
         entityData.define(CURIOS_SUPPORT, false);
+        entityData.define(STORED_INVISIBLE, false);
         entityData.define(HEAD_STACK, ItemStack.EMPTY);
         entityData.define(CHEST_STACK, ItemStack.EMPTY);
         entityData.define(LEGS_STACK, ItemStack.EMPTY);
@@ -606,10 +677,17 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         if (damage <= 0.0F)
             return false;
         // Absorption hearts soak up damage after armor, before health.
+        boolean absorbedDamage = false;
         if (absorption > 0.0F) {
             float absorbed = Math.min(absorption, damage);
             absorption -= absorbed;
             damage -= absorbed;
+            absorbedDamage = absorbed > 0.0F;
+        }
+        if (damage <= 0.0F) {
+            if (absorbedDamage)
+                pushSnapshot();
+            return absorbedDamage;
         }
         health -= damage;
         if (health <= 0.0F && !tryUseTotem(source)) {
@@ -693,6 +771,7 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
     private void tickEffects() {
         if (hurtCooldown > 0)
             hurtCooldown--;
+        tickStoredEffects();
         if (absorptionTicks > 0 && --absorptionTicks == 0)
             absorption = 0.0F;
         if (fireResistTicks > 0) {
@@ -705,6 +784,34 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
                 health = Math.min(maxHealth, health + 1.0F);
                 pushSnapshot();
             }
+        }
+    }
+
+    private void tickStoredEffects() {
+        boolean changed = false;
+        for (int i = storedEffects.size() - 1; i >= 0; i--) {
+            MobEffectInstance effect = storedEffects.get(i);
+            int duration = effect.getDuration();
+            if (duration < 0)
+                continue;
+            if (duration <= 1) {
+                storedEffects.remove(i);
+                changed = true;
+                continue;
+            }
+            if (tickCount % 20 == 0) {
+                CompoundTag effectTag = effect.save(new CompoundTag());
+                effectTag.putInt("Duration", duration - 1);
+                MobEffectInstance updated = MobEffectInstance.load(effectTag);
+                if (updated != null) {
+                    storedEffects.set(i, updated);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            syncStoredInvisibility();
+            pushSnapshot();
         }
     }
 
@@ -881,6 +988,7 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         fireResistTicks = tag.getInt("Fire");
         absorptionTicks = tag.getInt("AbsTicks");
         absorption = tag.getFloat("Abs");
+        readEffects(tag.getList("Effects", Tag.TAG_COMPOUND));
         syncEquipment();
     }
 
@@ -898,6 +1006,7 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         tag.put("ExtraKeys", writeKeys(extraKeys));
         tag.putFloat("Health", health);
         tag.putFloat("MaxHealth", maxHealth);
+        tag.put("Effects", writeEffects(storedEffects));
         tag.putInt("SelectedSlot", selectedSlot);
         tag.putInt("Regen", regenTicks);
         tag.putInt("Fire", fireResistTicks);

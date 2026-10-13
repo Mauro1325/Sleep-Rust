@@ -30,7 +30,7 @@ public final class CorpseConfig {
                 .define("suppressLoginDeathMessage", true);
         MAX_EXTRA_SLOTS = B.comment("Maximum number of extra slots (Curios + BlockZ equipment) a body can hold. Slots beyond",
                 "this limit are not moved to the body and stay with the player.")
-                .defineInRange("maxExtraSlots", 48, 0, 64);
+                .defineInRange("maxExtraSlots", 64, 0, 64);
         B.pop(); SPEC = B.build();
     }
     private CorpseConfig() { }

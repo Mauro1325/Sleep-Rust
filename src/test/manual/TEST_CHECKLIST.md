@@ -16,6 +16,10 @@
 - [ ] Body with a totem in the hotbar slot that was selected at logout, or in the offhand: it pops, health 1, totem consumed. Owner logs in with those effects.
 - [ ] Body with the totem in a non-selected hotbar slot does NOT pop.
 - [ ] Body in water: loses air, then 2 damage/second; Respiration helmet slows it; death message is the drowning one.
+- [ ] Disconnect with invisibility: the body model is hidden but sleep particles remain visible; it can still be targeted, opened and looted until the effect expires.
+- [ ] With Curios installed, the body and looter panels keep the compact layout and show empty as well as occupied slots; populated body slots remain lootable and restore to their matching slots.
+- [ ] Disconnect with low health, absorption hearts and active potion effects: the body starts with the same state; damage it (including a hit absorbed entirely by absorption), reconnect, and verify the player's health/absorption match the remaining body state and the effects are restored.
+- [ ] Repeat body recovery after its chunk unloads or a server restart to verify health, absorption and active effects come from the persisted snapshot.
 - [ ] Owner logs out at base, body is moved/owner is moved with /tp while offline (also to another dimension): on login the owner appears at the body with all items and health.
 - [ ] Same as above with the body's chunk unloaded (nobody nearby, restart the server in between).
 - [ ] Delete the body with /kill @e[type=persistentbodies:player_corpse] (or remove it from the chunk): on login the owner gets items from the backup snapshot, and the entity never duplicates them.

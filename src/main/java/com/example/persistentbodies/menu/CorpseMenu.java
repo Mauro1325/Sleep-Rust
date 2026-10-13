@@ -1,6 +1,7 @@
 package com.example.persistentbodies.menu;
 
 import com.example.persistentbodies.curios.CuriosBridge;
+import com.example.persistentbodies.compat.ExtraSlots;
 import com.example.persistentbodies.entity.PlayerCorpseEntity;
 import com.example.persistentbodies.registry.ModMenus;
 import java.util.ArrayList;
@@ -35,11 +36,14 @@ public class CorpseMenu extends AbstractContainerMenu {
     /** Extra-slot panels never grow taller than this many rows; extra slots spill into more columns instead. */
     public static final int EXTRA_MAX_ROWS = 5;
     public static final int EXTRA_MIN_COLUMNS = 4;
-    /** First row of the looter's own accessories (display only), in the right panel next to the looter's inventory. */
+    /** First row of the looter's own accessories, displayed beside the looter's inventory. */
     public static final int LOOTER_EXTRA_Y = 158;
     public static final int LOOTER_EXTRA_PANEL_Y = LOOTER_EXTRA_Y - 18;
     /** Upper bound of the looter's accessory slots shown for comparison. */
     public static final int MAX_LOOTER_CURIOS = 40;
+
+    public record CurioSlot(String key, ItemStack stack) { }
+
     private final int playerStart;      // first looter slot in the menu
     private final int playerInvEnd;     // main inventory + hotbar of the looter
     private final List<String> extraKeys;
@@ -48,7 +52,7 @@ public class CorpseMenu extends AbstractContainerMenu {
     private final PlayerCorpseEntity corpseEntity;
     private final Inventory looterInventory;
     private final Container looterCurios;
-    private final int looterCuriosCount;
+    private final List<String> looterCuriosKeys;
     private final int looterCuriosColumns;
     private final int looterEquipEnd;   // end of the looter's equipment slots; display-only slots come after
 
@@ -57,22 +61,22 @@ public class CorpseMenu extends AbstractContainerMenu {
         this(id, playerInventory, getEntity(playerInventory, data), readKeys(data), readLooterCurios(data));
     }
 
-    /** The server tells the client how many accessory slots the looter has; the client's copies start empty and are filled by the menu sync. */
-    private static List<ItemStack> readLooterCurios(FriendlyByteBuf data) {
+    /** The server sends every Curios slot key, including slots that are currently empty. */
+    private static List<CurioSlot> readLooterCurios(FriendlyByteBuf data) {
         int count = Math.min(data.readVarInt(), MAX_LOOTER_CURIOS);
-        List<ItemStack> stacks = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) stacks.add(ItemStack.EMPTY);
-        return stacks;
+        List<CurioSlot> slots = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) slots.add(new CurioSlot(data.readUtf(), ItemStack.EMPTY));
+        return slots;
     }
 
-    /** The looter's Curios slots (empty ones too), copied. Server side; the same list sizes the client menu. */
-    public static List<ItemStack> looterCurios(Player player) {
-        List<ItemStack> stacks = new ArrayList<>();
+    /** The looter's Curios slots (empty ones too), copied with their stable Curios identifiers. */
+    public static List<CurioSlot> looterCurios(Player player) {
+        List<CurioSlot> slots = new ArrayList<>();
         for (CuriosBridge.SlotRef ref : CuriosBridge.listSlots(player)) {
-            if (stacks.size() >= MAX_LOOTER_CURIOS) break;
-            stacks.add(ref.stack().copy());
+            if (slots.size() >= MAX_LOOTER_CURIOS) break;
+            slots.add(new CurioSlot(ExtraSlots.CURIOS + ref.identifier() + ":" + ref.index(), ref.stack().copy()));
         }
-        return stacks;
+        return slots;
     }
 
     private static List<String> readKeys(FriendlyByteBuf data) {
@@ -93,7 +97,7 @@ public class CorpseMenu extends AbstractContainerMenu {
         this(id, playerInventory, entity, entity.getExtraKeys(), looterCurios(playerInventory.player));
     }
 
-    private CorpseMenu(int id, Inventory playerInventory, PlayerCorpseEntity entity, List<String> keys, List<ItemStack> looterStacks) {
+    private CorpseMenu(int id, Inventory playerInventory, PlayerCorpseEntity entity, List<String> keys, List<CurioSlot> looterSlots) {
         super(ModMenus.CORPSE_MENU.get(), id);
         this.corpseEntity = entity;
         this.looterInventory = playerInventory;
@@ -103,10 +107,10 @@ public class CorpseMenu extends AbstractContainerMenu {
         this.playerStart = VANILLA_SLOTS + extraKeys.size();
         this.playerInvEnd = playerStart + 36;
         this.looterEquipEnd = playerInvEnd + 5; // 4 armor pieces + offhand
-        this.looterCuriosCount = looterStacks.size();
-        this.looterCuriosColumns = columnsFor(looterCuriosCount);
-        SimpleContainer display = new SimpleContainer(Math.max(1, looterCuriosCount));
-        for (int i = 0; i < looterCuriosCount; i++) display.setItem(i, looterStacks.get(i));
+        this.looterCuriosKeys = looterSlots.stream().map(CurioSlot::key).toList();
+        this.looterCuriosColumns = columnsFor(looterCuriosKeys.size());
+        SimpleContainer display = new SimpleContainer(Math.max(1, looterSlots.size()));
+        for (int i = 0; i < looterSlots.size(); i++) display.setItem(i, looterSlots.get(i).stack());
         this.looterCurios = display;
         checkContainerSize(corpse, VANILLA_SLOTS + extraKeys.size());
         corpse.startOpen(playerInventory.player);
@@ -126,7 +130,8 @@ public class CorpseMenu extends AbstractContainerMenu {
         addSlot(new LootSlot(corpse, 40, EQUIP_X, CORPSE_Y + 72).setBackground(InventoryMenu.BLOCK_ATLAS, InventoryMenu.EMPTY_ARMOR_SLOT_SHIELD));
         // Extra slots (Curios, BlockZ equipment) live in their own side panel, one slot per extra the body holds.
         for (int i = 0; i < extraKeys.size(); i++) {
-            addSlot(new LootSlot(corpse, VANILLA_SLOTS + i, EXTRA_X + (i % extraColumns) * 18, CORPSE_Y + (i / extraColumns) * 18));
+            addSlot(new LootSlot(corpse, VANILLA_SLOTS + i,
+                    EXTRA_X + (i % extraColumns) * 18, CORPSE_Y + (i / extraColumns) * 18));
         }
 
         // The looter's own inventory, in exactly the same layout, right below.
@@ -141,8 +146,9 @@ public class CorpseMenu extends AbstractContainerMenu {
         // Looter's offhand, right under their armor, mirroring the body's equipment column.
         addSlot(new Slot(playerInventory, 40, EQUIP_X, PLAYER_Y + 72).setBackground(InventoryMenu.BLOCK_ATLAS, InventoryMenu.EMPTY_ARMOR_SLOT_SHIELD));
         // Looter's own accessories, shown (read only) in the right panel so they can be compared with the body's.
-        for (int i = 0; i < looterCuriosCount; i++) {
-            addSlot(new DisplaySlot(looterCurios, i, EXTRA_X + (i % looterCuriosColumns) * 18, LOOTER_EXTRA_Y + (i / looterCuriosColumns) * 18));
+        for (int i = 0; i < looterCuriosKeys.size(); i++) {
+            addSlot(new DisplaySlot(looterCurios, i,
+                    EXTRA_X + (i % looterCuriosColumns) * 18, LOOTER_EXTRA_Y + (i / looterCuriosColumns) * 18));
         }
     }
 
@@ -160,9 +166,10 @@ public class CorpseMenu extends AbstractContainerMenu {
     public int getExtraCount() { return extraKeys.size(); }
     public int getExtraColumns() { return extraColumns; }
     public int getExtraRows() { return extraKeys.isEmpty() ? 0 : (extraKeys.size() + extraColumns - 1) / extraColumns; }
-    public int getLooterCuriosCount() { return looterCuriosCount; }
+    public int getExtraPanelHeight() { return CORPSE_Y + getExtraRows() * 18 + 6; }
+    public int getLooterCuriosCount() { return looterCuriosKeys.size(); }
     public int getLooterCuriosColumns() { return looterCuriosColumns; }
-    public int getLooterCuriosRows() { return looterCuriosCount == 0 ? 0 : (looterCuriosCount + looterCuriosColumns - 1) / looterCuriosColumns; }
+    public int getLooterCuriosRows() { return looterCuriosKeys.isEmpty() ? 0 : (looterCuriosKeys.size() + looterCuriosColumns - 1) / looterCuriosColumns; }
 
     @Override public boolean stillValid(Player player) {
         return corpseEntity.isAlive() && corpseEntity.distanceToSqr(player) <= 64.0D;

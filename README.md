@@ -1,10 +1,17 @@
 # Sleep-Rust
 
-Mod de Minecraft Java **1.20.1**, **Forge 47.4.10** y **Java 17**. Versión del proyecto: **0.2.3**.
+Mod de Minecraft Java **1.20.1**, **Forge 47.4.10** y **Java 17**. Versión del proyecto: **0.2.4**.
 
 Sleep-Rust agrega cuerpos saqueables cuando un jugador vivo se desconecta y un sistema propio de jugadores caídos y reanimación. Es un proyecto en desarrollo: compilá y probá en un mundo descartable con copias de seguridad antes de usarlo en un mundo importante.
 
-## Novedades de la versión 0.2.3
+## Novedades de la versión 0.2.4
+
+- Al desconectarse, el cuerpo conserva la vida, la absorción y los efectos activos. Si recibe daño, el jugador recupera la vida restante al volver; el respaldo guarda también ese estado.
+- Al recuperar al jugador, la salud del cuerpo se aplica después de devolver el inventario y se limita al máximo de vida que tenía guardado el cuerpo.
+- Un cuerpo de jugador con invisibilidad permanece oculto mientras se ven sus partículas y sigue pudiendo abrirse y saquearse.
+- Los paneles de accesorios mantienen el diseño compacto anterior; los slots vacíos de Curios siguen visibles junto con los ocupados.
+
+## Cambios de la versión 0.2.3
 
 - Se añadió el sistema propio de caída y reanimación: 8 segundos para reanimar y un plazo de 2:30 antes de morir.
 - Se reforzó el procesamiento de las muertes causadas al destruir un cuerpo mientras su dueño está desconectado. La muerte pendiente se conserva hasta confirmar y guardar la muerte al reconectarse.
@@ -17,6 +24,7 @@ Sleep-Rust agrega cuerpos saqueables cuando un jugador vivo se desconecta y un s
 ### Cuerpos al desconectarse
 
 - Al desconectarse un jugador vivo se crea un cuerpo con su inventario, armadura y mano secundaria. La integración disponible con Curios y BlockZ también maneja accesorios y slots adicionales.
+- El cuerpo conserva la vida, los efectos activos y la absorción del jugador al desconectarse. Si el cuerpo recibe daño, el dueño recupera la vida y absorción restantes al volver; ese estado también se guarda en el respaldo del mundo.
 - El dueño puede recuperar lo que quede al volver; el contenido que ya fue saqueado no se restaura.
 - El estado del cuerpo y un snapshot de respaldo se guardan en los datos del mundo. La recuperación busca el cuerpo aunque esté en otra dimensión o en un chunk que necesite cargarse.
 - El cuerpo tiene modelo y renderer de jugador, skin, equipo, animación de respiración, partícula de sueño, nombre al mirarlo e inventario saqueable.
@@ -61,6 +69,13 @@ Las opciones del cuerpo saqueable están en `CorpseConfig`.
 4. Instalar el mismo jar en el servidor Forge y en cada cliente conectado.
 
 Los tests automáticos de Gradle no incluyen pruebas de Minecraft/Forge. El banco `src/test/sim/run.sh` verifica reglas puras de la lógica y la lista `src/test/manual/TEST_CHECKLIST.md` cubre pruebas manuales; ninguna sustituye una prueba en servidor dedicado.
+
+### Validación pendiente
+
+- Probar en un servidor Forge dedicado la reconexión con poca vida, absorción y efectos; golpear el cuerpo y verificar que la vida y absorción restantes vuelvan correctamente.
+- Repetir la recuperación con el cuerpo en un chunk descargado y después de reiniciar el servidor.
+- Confirmar visualmente que el inventario Curios mantiene el diseño compacto y muestra los slots vacíos sin salirse del GUI, con y sin Curios/BlockZ.
+- Confirmar en juego que la invisibilidad oculta el modelo pero conserva visibles las partículas y permite seleccionar, abrir y saquear el cuerpo.
 
 ## Arquitectura
 

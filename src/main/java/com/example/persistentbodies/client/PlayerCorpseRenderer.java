@@ -12,6 +12,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -43,6 +44,11 @@ public class PlayerCorpseRenderer extends EntityRenderer<PlayerCorpseEntity> {
         this.armorModel = new PlayerCorpseModel(context.bakeLayer(PlayerCorpseModel.ARMOR_LAYER_LOCATION));
         this.slimArmorModel = new PlayerCorpseModel(context.bakeLayer(PlayerCorpseModel.SLIM_ARMOR_LAYER_LOCATION));
         this.shadowRadius = 0.35F;
+    }
+
+    @Override
+    public boolean shouldRender(PlayerCorpseEntity entity, Frustum frustum, double x, double y, double z) {
+        return !entity.hasStoredInvisibility() && super.shouldRender(entity, frustum, x, y, z);
     }
 
     @Override

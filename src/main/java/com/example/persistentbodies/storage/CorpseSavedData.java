@@ -36,7 +36,7 @@ public class CorpseSavedData extends SavedData {
         public double y;
         public double z;
         public float yaw;
-        /** Nullable. Contains "Items", "Health", "MaxHealth", "Regen", "Fire", "AbsTicks", "Abs". */
+        /** Nullable. Contains the corpse's inventory, health, active effects and totem state. */
         @Nullable
         public CompoundTag snapshot;
 

@@ -19,6 +19,7 @@ import com.example.persistentbodies.storage.CorpseSavedData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket;
@@ -129,6 +130,8 @@ public class PlayerConnectionHandler {
         corpse.initialize(player.getUUID(), player.getGameProfile().getName(), textureValue, textureSignature, player.serverLevel().getGameTime());
         // The body inherits the player's current health; hits on the body are hits on the player.
         corpse.setHealthState(player.getHealth(), player.getMaxHealth());
+        corpse.setStoredEffects(player.getActiveEffects());
+        corpse.setAbsorptionState(player.getAbsorptionAmount());
         // The item in the selected hotbar slot is the body's "main hand" (matters for totems).
         corpse.setSelectedSlot(player.getInventory().selected);
         for (int i = 0; i < 41; i++) corpse.setItem(i, player.getInventory().getItem(i).copy());
@@ -469,10 +472,11 @@ public class PlayerConnectionHandler {
         if (!player.getUUID().equals(corpse.getOwnerId()) || corpse.isRecovering()) return;
         corpse.setRecovering(true);
         // Hand the body's remaining health (and totem effects) back to the player.
-        player.setHealth(Math.min(corpse.getHealth(), player.getMaxHealth()));
+        applyStoredEffects(player, corpse.getStoredEffects());
         applyEffects(player, corpse.getRegenTicks(), corpse.getFireResistTicks(), corpse.getAbsorptionTicks(),
                 corpse.getAbsorption());
         boolean remaining = transfer(player, corpse, corpse.getExtraKeys());
+        player.setHealth(Math.min(Math.max(corpse.getHealth(), 0.5F), corpse.getMaxHealth()));
         player.getInventory().setChanged();
         BlockZBridge.syncToClient(player);
         corpse.setRecovering(false);
@@ -501,9 +505,9 @@ public class PlayerConnectionHandler {
         if (!entityIsGone) data.markOrphan(corpseId);
         SimpleContainer source = new SimpleContainer(PlayerCorpseEntity.TOTAL_SLOTS);
         PlayerCorpseEntity.readItems(snapshot.getList("Items", Tag.TAG_COMPOUND), source);
-        float maxHealth = snapshot.contains("MaxHealth") ? snapshot.getFloat("MaxHealth") : 20.0F;
+        float maxHealth = snapshot.contains("MaxHealth") ? Math.max(1.0F, snapshot.getFloat("MaxHealth")) : 20.0F;
         float health = snapshot.contains("Health") ? snapshot.getFloat("Health") : maxHealth;
-        player.setHealth(Math.min(Math.max(health, 0.5F), player.getMaxHealth()));
+        applyStoredEffects(player, readStoredEffects(snapshot.getList("Effects", Tag.TAG_COMPOUND)));
         applyEffects(player, snapshot.getInt("Regen"), snapshot.getInt("Fire"), snapshot.getInt("AbsTicks"),
                 snapshot.getFloat("Abs"));
         transfer(player, source, PlayerCorpseEntity.readKeys(snapshot));
@@ -512,6 +516,7 @@ public class PlayerConnectionHandler {
             ItemStack left = source.getItem(i);
             if (!left.isEmpty()) player.drop(left.copy(), false);
         }
+        player.setHealth(Math.min(Math.max(health, 0.5F), maxHealth));
         player.getInventory().setChanged();
         BlockZBridge.syncToClient(player);
         if (!entityIsGone) player.sendSystemMessage(Component.translatable("message.persistentbodies.restored_from_backup"));
@@ -558,9 +563,26 @@ public class PlayerConnectionHandler {
             float absorption) {
         if (regenTicks > 0) player.addEffect(new MobEffectInstance(MobEffects.REGENERATION, regenTicks, 1));
         if (fireTicks > 0) player.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, fireTicks, 0));
-        if (absorptionTicks > 0 && absorption > 0.0F) {
+        if (absorptionTicks > 0 && absorption > 0.0F)
             player.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, absorptionTicks, 1));
+        if (absorption > 0.0F)
             player.setAbsorptionAmount(absorption);
+    }
+
+    private static List<MobEffectInstance> readStoredEffects(ListTag list) {
+        List<MobEffectInstance> effects = new ArrayList<>(list.size());
+        for (int i = 0; i < list.size(); i++) {
+            MobEffectInstance effect = MobEffectInstance.load(list.getCompound(i));
+            if (effect != null)
+                effects.add(effect);
         }
+        return effects;
+    }
+
+    private static void applyStoredEffects(ServerPlayer player, List<MobEffectInstance> effects) {
+        for (MobEffectInstance current : List.copyOf(player.getActiveEffects()))
+            player.removeEffect(current.getEffect());
+        for (MobEffectInstance effect : effects)
+            player.addEffect(new MobEffectInstance(effect));
     }
 }
