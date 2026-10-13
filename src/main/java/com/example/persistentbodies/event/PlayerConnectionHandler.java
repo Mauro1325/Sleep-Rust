@@ -5,11 +5,14 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import com.mojang.authlib.properties.Property;
+import com.mojang.logging.LogUtils;
+import com.example.persistentbodies.logic.DeathRetryPolicy;
+import org.slf4j.Logger;
 import com.example.persistentbodies.compat.BlockZBridge;
 import com.example.persistentbodies.compat.ExtraSlots;
-import com.example.persistentbodies.compat.PlayerReviveBridge;
 import com.example.persistentbodies.config.CorpseConfig;
 import com.example.persistentbodies.curios.CuriosBridge;
+import com.example.persistentbodies.downed.DownedManager;
 import com.example.persistentbodies.entity.PlayerCorpseEntity;
 import com.example.persistentbodies.registry.ModEntities;
 import com.example.persistentbodies.storage.CorpseSavedData;
@@ -41,6 +44,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 /** Handles logout transfer and login recovery on the logical server thread. */
 public class PlayerConnectionHandler {
+    private static final Logger LOGGER = LogUtils.getLogger();
     /** Keeps the body's chunk loaded (entity-ticking) while the owner is being reunited with it. */
     private static final TicketType<UUID> RECOVERY_TICKET = TicketType.create("persistentbodies_recovery",
             UUID::compareTo, 600);
@@ -69,6 +73,17 @@ public class PlayerConnectionHandler {
     }
 
     private final List<PendingRecovery> pending = new ArrayList<>();
+    /**
+     * Retry schedule per owner. The markers themselves are durable and live in SavedData until the actual death is
+     * confirmed; this map only holds the in-memory backoff and is rebuilt on demand (restart, relog).
+     */
+    private final java.util.Map<UUID, DeathRetryPolicy> deathRetries = new java.util.HashMap<>();
+    /**
+     * The ServerPlayer instance created by each player's latest login. A pending offline death may only ever be applied
+     * to THIS instance: a respawn (or any other death) creates a new instance, and that one must never be killed by a
+     * marker that belongs to the previous life.
+     */
+    private final java.util.Map<UUID, ServerPlayer> loginInstance = new java.util.HashMap<>();
 
     // ---- Logout
     // ----------------------------------------------------------------------------------------
@@ -76,9 +91,21 @@ public class PlayerConnectionHandler {
     @SubscribeEvent
     public void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        deathWatch.remove(player.getUUID());
+        loginInstance.remove(player.getUUID(), player);
+        // Case B: a downed player who disconnects dies for real (vanilla death rules) and gets NO body. The call is
+        // idempotent and also cancels any revive in which this player took part (as reviver or as target).
+        if (DownedManager.handleLogout(player)) return;
         if (!CorpseConfig.ENABLED.get() || player.isDeadOrDying()) return;
         CorpseSavedData data = CorpseSavedData.get(player.serverLevel());
         if (data.get(player.getUUID()) != null) return;
+        if (data.isDeadPending(player.getUUID())) {
+            // The player disconnected again before their death could be completed.
+            // A new body would be a second, unrelated stand-in for someone who is supposed to be dead.
+            LOGGER.warn("{} left while a death is still pending; no body is created and the marker is kept.",
+                    player.getGameProfile().getName());
+            return;
+        }
 
         PlayerCorpseEntity corpse = ModEntities.PLAYER_CORPSE.get().create(player.serverLevel());
         if (corpse == null) return;
@@ -126,13 +153,18 @@ public class PlayerConnectionHandler {
     @SubscribeEvent
     public void onLogin(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        loginInstance.put(player.getUUID(), player);
+        // Sends the downed list to the joiner and schedules the respawn of a player killed while downed on logout.
+        DownedManager.onLogin(player);
         CorpseSavedData data = CorpseSavedData.get(player.serverLevel());
         // The body was killed while the player was away: its items already went to a BlockZ corpse (or were
         // dropped), now the player dies too.
-        if (data.consumeDead(player.getUUID())) {
-            String killer = data.takeKiller(player.getUUID());
-            dieAfterOfflineDeath(player, data);
-            showSleepingDeathScreen(player, killer);
+        if (data.isDeadPending(player.getUUID())) {
+            LOGGER.info("{} logged in with a pending death marker; finishing it before any body recovery.",
+                    player.getGameProfile().getName());
+            // Never run ordinary body recovery while a death is pending: the old snapshot must not be restored over a
+            // player whose body was already killed. If this attempt fails the marker stays and the server tick retries.
+            attemptPendingDeath(player, data);
             return;
         }
         if (!CorpseConfig.RECOVER_ON_JOIN.get()) return;
@@ -183,7 +215,7 @@ public class PlayerConnectionHandler {
      * player does carry something, the death is left completely normal, so those items end up in a regular corpse
      * or drop instead of being lost. The previous rule values are always restored.
      */
-    private static void dieAfterOfflineDeath(ServerPlayer player, CorpseSavedData data) {
+    private static boolean dieAfterOfflineDeath(ServerPlayer player, CorpseSavedData data) {
         GameRules rules = player.serverLevel().getGameRules();
         boolean worldKeepsInventory = rules.getBoolean(GameRules.RULE_KEEPINVENTORY);
         CorpseSavedData.Record record = data.getRecord(player.getUUID());
@@ -197,18 +229,152 @@ public class PlayerConnectionHandler {
         GameRules.BooleanValue messageRule = rules.getRule(GameRules.RULE_SHOWDEATHMESSAGES);
         boolean previousMessages = messageRule.get();
         MinecraftServer server = player.getServer();
+        boolean deathCompleted;
         try {
             if (forceKeepInventory) keepRule.set(true, server);
             // The body's death was already announced (when messages are on); do not announce it twice.
             if (CorpseConfig.MESSAGES.get() && CorpseConfig.SUPPRESS_LOGIN_DEATH_MESSAGE.get()) {
                 messageRule.set(false, server);
             }
-            // PlayerRevive would turn a plain kill() into a "downed, waiting for a revive" player. The body already
-            // died, so the owner must die for real.
-            if (!(PlayerReviveBridge.isLoaded() && PlayerReviveBridge.kill(player))) player.kill();
+            // Explicitly bypass this mod's downed interception too. Damage-type tags alone are not a reliable guard
+            // for a required offline death.
+            deathCompleted = DownedManager.killForPendingOfflineDeath(player);
         } finally {
             keepRule.set(worldKeepsInventory, server);
             messageRule.set(previousMessages, server);
+        }
+        return deathCompleted;
+    }
+
+    /**
+     * One guarded attempt to finish a pending death. Never throws: any failure is logged with its stack trace, the
+     * durable marker is kept and the next attempt is scheduled with backoff (no retry limit, the marker is never dropped).
+     *
+     * @return true when the death is confirmed and the marker was resolved.
+     */
+    private boolean attemptPendingDeath(ServerPlayer player, CorpseSavedData data) {
+        UUID id = player.getUUID();
+        long now = player.getServer().getTickCount();
+        if (loginInstance.get(id) != player) {
+            // A different ServerPlayer instance can mean another mod respawned the player after PlayerRevive
+            // intercepted the first attempt. The durable marker is only cleared after a confirmed death, so transfer
+            // the pending death to the current instance instead of silently allowing the owner to live.
+            LOGGER.warn("{} has a new player instance while an offline death is pending; retrying on the current instance.",
+                    player.getGameProfile().getName());
+            loginInstance.put(id, player);
+        }
+        DeathRetryPolicy retry = deathRetries.computeIfAbsent(id, k -> new DeathRetryPolicy());
+        boolean done = false;
+        try {
+            done = tryFinishOfflineDeath(player, data, data.getDeadKiller(id), data.getDeadCause(id));
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.error("Unexpected error while finishing the pending death of {}", player.getGameProfile().getName(), e);
+        }
+        if (done) {
+            deathRetries.remove(id);
+        } else {
+            int delay = retry.failed(now);
+            LOGGER.warn("Pending death of {} not completed (attempt {}); marker kept, next attempt in {} ticks.",
+                    player.getGameProfile().getName(), retry.failures(), delay);
+        }
+        return done;
+    }
+
+    /** Ticks during which a player that was just killed at login is watched for a "resurrection". */
+    private static final int DEATH_WATCH_TICKS = 200;
+    /** How many times a resurrected player is killed again before giving up (and logging it). */
+    private static final int DEATH_WATCH_MAX_RETRIES = 3;
+
+    /** The instance that was killed. A respawn creates a NEW ServerPlayer, so a different instance means "respawned". */
+    private static final class DeathWatch {
+        final ServerPlayer killed;
+        final String killer;
+        final String cause;
+        int ticksLeft = DEATH_WATCH_TICKS;
+        int retries;
+        int screenResends = 3;
+
+        DeathWatch(ServerPlayer killed, String killer, String cause) {
+            this.killed = killed;
+            this.killer = killer;
+            this.cause = cause;
+        }
+    }
+
+    private final java.util.Map<UUID, DeathWatch> deathWatch = new java.util.HashMap<>();
+
+    private boolean tryFinishOfflineDeath(ServerPlayer player, CorpseSavedData data, String killer, String cause) {
+        boolean alreadyDead = player.isDeadOrDying();
+        if (!alreadyDead && !dieAfterOfflineDeath(player, data)) return false;
+        // Persist the dead player BEFORE clearing the marker. If saving fails, keep the marker and retry; a respawned
+        // instance will also receive the still-pending death instead of silently becoming alive.
+        try {
+            player.getServer().getPlayerList().saveAll();
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.error("Could not save the player data after the offline death of {} (pending marker retained)",
+                    player.getGameProfile().getName(), e);
+            return false;
+        }
+        data.resolveDead(player.getUUID());
+        CorpseSavedData.flush(player.serverLevel());
+        LOGGER.info("Pending death of {} resolved.", player.getGameProfile().getName());
+        try {
+            showSleepingDeathScreen(player, killer, cause);
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.error("Could not send the sleeping-death screen to {}", player.getGameProfile().getName(), e);
+        }
+        deathWatch.put(player.getUUID(), new DeathWatch(player, killer, cause));
+        return true;
+    }
+
+    /**
+     * Watches players killed at login. A different ServerPlayer instance means the player clicked "Respawn" (that is a
+     * normal, finished death: never kill it again). The SAME instance with health above 0 means something resurrected it
+     * after the kill: it is killed again (limited retries) and the diagnostics are logged.
+     */
+    private void processDeathWatch(MinecraftServer server) {
+        if (deathWatch.isEmpty()) return;
+        Iterator<java.util.Map.Entry<UUID, DeathWatch>> it = deathWatch.entrySet().iterator();
+        while (it.hasNext()) {
+            java.util.Map.Entry<UUID, DeathWatch> entry = it.next();
+            DeathWatch watch = entry.getValue();
+            ServerPlayer current = server.getPlayerList().getPlayer(entry.getKey());
+            if (current == null) { // went offline
+                it.remove();
+                continue;
+            }
+            if (current != watch.killed) { // respawned: the death is complete
+                it.remove();
+                continue;
+            }
+            if (current.getHealth() <= 0.0F) { // still dead, waiting for the respawn button
+                if (watch.screenResends > 0) {
+                    showSleepingDeathScreen(current, watch.killer, watch.cause);
+                    watch.screenResends--;
+                }
+                if (--watch.ticksLeft <= 0) it.remove();
+                continue;
+            }
+            String name = current.getGameProfile().getName();
+            if (watch.retries >= DEATH_WATCH_MAX_RETRIES) {
+                LOGGER.error("{} keeps coming back to life after the offline death (health={}); giving up.",
+                        name, current.getHealth());
+                it.remove();
+                continue;
+            }
+            watch.retries++;
+            LOGGER.error("{} was brought back to life after the offline death (same player instance, health={}); killing again ({}/{}).",
+                    name, current.getHealth(), watch.retries, DEATH_WATCH_MAX_RETRIES);
+            try {
+                CorpseSavedData data = CorpseSavedData.get(current.serverLevel());
+                if (dieAfterOfflineDeath(current, data)) {
+                    server.getPlayerList().saveAll();
+                    showSleepingDeathScreen(current, watch.killer, watch.cause);
+                    watch.ticksLeft = DEATH_WATCH_TICKS;
+                }
+            } catch (RuntimeException | LinkageError e) {
+                LOGGER.error("Could not kill {} again", name, e);
+            }
         }
     }
 
@@ -216,20 +382,55 @@ public class PlayerConnectionHandler {
      * The death screen of a player whose body was killed while they slept: "Te mataron durmiendo: X". A second
      * combat-kill packet makes the client replace the vanilla death screen (which shows the generic death message).
      */
-    private static void showSleepingDeathScreen(ServerPlayer player, String killer) {
+    private static void showSleepingDeathScreen(ServerPlayer player, String killer, String cause) {
         if (player.isAlive() || player.connection == null) return;
-        Component message = killer.isEmpty()
-                ? Component.translatable("message.persistentbodies.killed_sleeping_unknown")
-                : Component.translatable("message.persistentbodies.killed_sleeping", killer);
+        Component message;
+        if (!killer.isEmpty()) {
+            message = Component.translatable("message.persistentbodies.killed_sleeping", killer);
+        } else if (!cause.isEmpty()) {
+            Component vanillaCause = Component.translatable("death.attack." + cause, player.getDisplayName());
+            message = Component.translatable("message.persistentbodies.killed_sleeping_cause", vanillaCause);
+        } else {
+            message = Component.translatable("message.persistentbodies.killed_sleeping_unknown");
+        }
         player.connection.send(new ClientboundPlayerCombatKillPacket(player.getId(), message));
     }
 
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END || pending.isEmpty()) return;
+        if (event.phase != TickEvent.Phase.END) return;
+        processDeathWatch(event.getServer());
+        processPendingDeaths(event.getServer());
+        if (pending.isEmpty()) return;
         Iterator<PendingRecovery> it = pending.iterator();
         while (it.hasNext()) {
             if (process(it.next())) it.remove();
+        }
+    }
+
+    /**
+     * Once per second: every owner with a durable pending-death marker who is online and whose retry is due gets another
+     * attempt. The marker set in SavedData is the single source of truth, so this also covers owners who were marked
+     * while online and survives restarts without any in-memory list.
+     */
+    private void processPendingDeaths(MinecraftServer server) {
+        if (server.getTickCount() % 20 != 0) return;
+        CorpseSavedData data = CorpseSavedData.get(server.overworld());
+        java.util.Set<UUID> owners = data.pendingDeadOwners();
+        if (owners.isEmpty()) {
+            deathRetries.clear();
+            return;
+        }
+        deathRetries.keySet().removeIf(id -> !owners.contains(id));
+        for (UUID owner : owners) {
+            ServerPlayer player = server.getPlayerList().getPlayer(owner);
+            if (player == null) {
+                deathRetries.remove(owner); // offline: the marker stays for their next login
+                continue;
+            }
+            DeathRetryPolicy retry = deathRetries.get(owner);
+            if (retry != null && !retry.isDue(server.getTickCount())) continue;
+            attemptPendingDeath(player, data);
         }
     }
 

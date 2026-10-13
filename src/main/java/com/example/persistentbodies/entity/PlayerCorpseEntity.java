@@ -4,6 +4,7 @@ import java.util.UUID;
 import javax.annotation.Nullable;
 import com.example.persistentbodies.compat.BlockZBridge;
 import com.example.persistentbodies.compat.ExtraSlots;
+import com.example.persistentbodies.downed.DownedManager;
 import com.example.persistentbodies.config.CorpseConfig;
 import com.example.persistentbodies.registry.ModParticles;
 import net.minecraft.core.BlockPos;
@@ -58,6 +59,7 @@ import net.minecraft.world.InteractionResult;
  * in this MVP.
  */
 public class PlayerCorpseEntity extends Entity implements MenuProvider, Container {
+    private static final org.slf4j.Logger PB_LOGGER = com.mojang.logging.LogUtils.getLogger();
     private static final EntityDataAccessor<String> OWNER_NAME = SynchedEntityData.defineId(PlayerCorpseEntity.class,
             EntityDataSerializers.STRING);
     private static final EntityDataAccessor<String> OWNER_UUID = SynchedEntityData.defineId(PlayerCorpseEntity.class,
@@ -780,10 +782,23 @@ public class PlayerCorpseEntity extends Entity implements MenuProvider, Containe
         if (owner != null) {
             if (!keepForOwner)
                 data.remove(owner);
-            // The real player is offline: they will be killed on their next login.
+            Entity attacker = source.getEntity();
+            String attackerName = attacker == null ? "" : attacker.getDisplayName().getString();
             if (!ownerOnline) {
-                Entity attacker = source.getEntity();
-                data.markDead(owner, attacker == null ? "" : attacker.getDisplayName().getString());
+                // The real player is offline: they will be killed on their next login. The marker is written to disk
+                // right away (before the body disappears) so a crash cannot lose it.
+                data.markDead(owner, attackerName, source.getMsgId());
+                CorpseSavedData.flush(serverLevel);
+                PB_LOGGER.info("Body of {} died while the owner is offline: pending death registered.", getOwnerName());
+            } else {
+                // Owner is online and currently downed while their (leftover) body is destroyed: finish the downed
+                // player for good. The server tick processes the durable marker (with retry/backoff).
+                net.minecraft.server.level.ServerPlayer online = serverLevel.getServer().getPlayerList().getPlayer(owner);
+                if (online != null && DownedManager.isDowned(online.getUUID())) {
+                    data.markDead(owner, attackerName, source.getMsgId());
+                    CorpseSavedData.flush(serverLevel);
+                    PB_LOGGER.info("Body of downed online owner {} destroyed: pending death registered.", getOwnerName());
+                }
             }
         }
         if (CorpseConfig.MESSAGES.get()) {

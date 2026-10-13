@@ -1,6 +1,9 @@
 package com.example.persistentbodies;
 
 import com.example.persistentbodies.config.CorpseConfig;
+import com.example.persistentbodies.config.DownedConfig;
+import com.example.persistentbodies.downed.DownedEvents;
+import com.example.persistentbodies.network.DownedNetwork;
 import com.example.persistentbodies.event.PlayerConnectionHandler;
 import com.example.persistentbodies.event.CorpseBlockProtection;
 import com.example.persistentbodies.event.CorpseCombatHandler;
@@ -23,6 +26,9 @@ public class PersistentBodies {
         ModMenus.MENUS.register(bus);
         ModParticles.PARTICLES.register(bus);
         ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, CorpseConfig.SPEC);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, DownedConfig.SPEC, "persistentbodies-downed.toml");
+        DownedNetwork.register();
+        MinecraftForge.EVENT_BUS.register(new DownedEvents());
         MinecraftForge.EVENT_BUS.register(new PlayerConnectionHandler());
         MinecraftForge.EVENT_BUS.register(new CorpseBlockProtection());
         MinecraftForge.EVENT_BUS.register(new CorpseCombatHandler());

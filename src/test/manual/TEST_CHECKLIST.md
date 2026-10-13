@@ -43,3 +43,46 @@ The unloaded-chunk, cross-dimension, crash-recovery and concurrent-looting cases
 - [ ] Reiniciar el servidor entre la desconexión y la muerte del cuerpo, y entre la muerte y la reconexión.
 - [ ] Matar el cuerpo con el chunk descargado / en otra dimensión.
 - [ ] Forzar cierre del servidor justo tras matar el cuerpo: revisar que no haya ítems duplicados (limitación conocida).
+
+
+## Muerte offline del cuerpo (bloqueante para release)
+
+- [ ] Con el sistema de caída activado, matar el cuerpo de un jugador offline -> al reconectar el dueño muere de verdad (sin volver a quedar caído) y ve "Te mataron durmiendo".
+- [ ] No instalar PlayerRevive para estas pruebas: no es compatible ni está soportado por Sleep-Rust.
+- [ ] Matar el cuerpo con un jugador atacante y comprobar que la pantalla dice quién fue; repetir con lava/caída y comprobar que muestra la causa.
+- [ ] La marca de muerte pendiente sobrevive a un reinicio / cierre forzado del servidor y se procesa en el siguiente login.
+- [ ] Si el jugador se desconecta durante los reintentos, la marca sobrevive y se procesa en el siguiente login.
+
+## Jugador caído y reanimación (sistema propio, sin PlayerRevive)
+
+Preparación: servidor Forge 1.20.1 (47.4.10) SIN el JAR de PlayerRevive, 2 jugadores (A, B), modo supervivencia.
+Ajustes útiles en `serverconfig/persistentbodies-downed.toml`: `reviveHoldSeconds` (8 por defecto), `downedTimeoutSeconds` (150 por defecto; 0 = nunca), `reviveDistance`, `costMode`, `hungerCost`, `saturationCost`.
+
+1. [ ] A recibe daño letal (mob/caída) -> queda caído, tendido, sin morir; B lo ve tumbado.
+2. [ ] Caído: no camina, no salta, no ataca, no usa objetos, no abre inventario, no tira ni recoge objetos, no recibe más daño, no regenera.
+3. [ ] B mantiene click derecho mirando a A durante 8 s -> A vuelve con EXACTAMENTE 4.0 de vida (2 corazones), se mueve al instante, conserva inventario/XP/equipo, sin cuerpo nuevo ni duplicados.
+4. [ ] `costMode=HUNGER`: B pierde `hungerCost` de hambre al COMPLETAR (no al empezar). Repetir con `SATURATION` y `BOTH`.
+5. [ ] B suelta click derecho a mitad / se aleja / recibe daño -> reanimación cancelada y B no pierde hambre ni saturación.
+6. [ ] B sin recursos suficientes (hambre o saturación según el modo) -> mensaje y no puede iniciar/completar.
+7. [ ] Un jugador caído no puede reanimarse a sí mismo (el click derecho no hace nada sobre uno mismo; paquete forjado rechazado por el servidor).
+8. [ ] No se puede reanimar a un jugador desconectado.
+9. [ ] A caído se DESCONECTA -> muere de verdad (se ve en el log "disconnected while downed"), sus objetos siguen las reglas de muerte normal (BlockZ / drops / keepInventory), NO aparece un cuerpo dormido de persistentbodies.
+10. [ ] A reconecta tras (9): reaparece (respawn automático), no está caído ni bloqueado, no recupera objetos.
+11. [ ] A VIVO se desconecta -> cuerpo dormido como antes; B lo saquea; al volver A no recupera lo saqueado.
+12. [ ] B y C intentan reanimar a A a la vez -> solo uno lo consigue (el otro recibe "ya lo están reanimando"); un solo cobro.
+13. [ ] Reiniciar el servidor con A caído -> A muere al desconectarse el servidor; al volver reaparece sin quedar bloqueado.
+14. [ ] B se desconecta o muere a mitad de la reanimación -> A sigue caído, sin coste cobrado. A muere a mitad (/kill) -> sesión cancelada.
+15. [ ] `downedTimeoutSeconds=150`: A muere a los 2:30 si nadie lo reanima; con 0 A sigue caído indefinidamente.
+16. [ ] /kill y el vacío sobre un caído lo matan de verdad. /kill sobre un vivo lo mata sin pasar por caído.
+17. [ ] Servidor dedicado, partida alojada (LAN) y 3+ jugadores: el HUD, la pose y el bloqueo de entrada se ven bien en todos los clientes.
+18. [ ] El JAR compila y el servidor arranca sin ningún JAR de PlayerRevive en `mods/`.
+
+## 0.2.1 (A y B en supervivencia)
+1. [ ] A caído, en su pantalla: la cámara ya NO salta; la pantalla se ve borrosa y rojiza.
+2. [ ] A caído se arrastra muy lento (≈35 %); no puede saltar ni correr.
+3. [ ] B mirando a A y con click derecho sostenido: barra y tiempo restante; B se agacha, mueve brazos, partículas sobre A. B con comida/arco en mano: no se usa el ítem.
+4. [ ] B mira a otro lado >0,5 s o suelta el click: se cancela. B mira de nuevo: empieza de cero.
+5. [ ] B detrás de una pared / sin mirar la hitbox: no avanza.
+6. [ ] Completar tras 8 s (`reviveHoldSeconds`; bajar el valor para probar): A se levanta con 2 corazones, B paga el coste. A muere a los 2:30 si no lo reaniman (`downedTimeoutSeconds`).
+7. [ ] B con click izquierdo sobre A caído: A muere (mensaje "A fue asesinado por B"); con `allowFinishOff=false` o PvP off no pasa nada. Tótem en la mano de A: no lo salva.
+8. [ ] Muerte offline: A se desconecta, B mata el cuerpo, A reconecta (muere), pulsa Respawn: A NO vuelve a morir (esperar >10 s). Repetir provocando un fallo al guardar si es posible.

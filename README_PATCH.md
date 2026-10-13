@@ -1,3 +1,5 @@
+> **Archivo histórico de parches:** las secciones de abajo describen cambios de versiones anteriores y no son documentación vigente. PlayerRevive no es compatible ni está soportado desde la versión 0.2.3; Sleep-Rust no está diseñado para funcionar con ese mod. Ver `README.md` y `DOWNED_SYSTEM.md`.
+
 # Patch for missing entity renderer
 
 Added `client/ClientModEvents.java` to register a renderer for `ModEntities.PLAYER_CORPSE` on the Forge MOD event bus and only on the client.
@@ -39,3 +41,53 @@ Verificado contra el código fuente de Curios 5.14.1+1.20.1: `CuriosApi.getCurio
 - **Nombre:** solo el nombre del jugador, y solo mientras lo mirás.
 - **Pantalla de muerte:** si matan el cuerpo offline, al reconectar el dueño ve "Te mataron durmiendo: <asesino>"
   (se guarda el asesino en `CorpseSavedData`, clave `DeadKiller`; se reemplaza la pantalla con un segundo `ClientboundPlayerCombatKillPacket`).
+
+
+---
+
+# Auditoría y correcciones: muerte offline + PlayerRevive (0.1.16)
+
+## Cambios aplicados
+
+- `CorpseSavedData`: se agregaron `isDeadPending`, `getDeadKiller` y `resolveDead`. La marca de muerte ya no se consume al entrar al servidor; se conserva hasta confirmar que el jugador realmente murió.
+- `PlayerConnectionHandler`: si hay una muerte pendiente, no entra en el flujo normal de recuperación del cuerpo/snapshot. Esto evita restaurar la vida o el inventario antiguos mientras se intenta completar la muerte.
+- `PlayerConnectionHandler`: si PlayerRevive impide completar la muerte, el servidor conserva la marca y vuelve a intentarlo en el tick del servidor (máximo una vez por segundo). Si el jugador se desconecta, el marcador persistente queda guardado para el siguiente login.
+- `PlayerReviveBridge`: distingue entre “el mod está instalado” y “la API se pudo resolver”. Si PlayerRevive está instalado y falla la reflexión, no se ejecuta silenciosamente `player.kill()` como fallback inseguro. Primero intenta la API de muerte definitiva; después marca al jugador como desangrado y recién entonces vuelve a intentar la muerte.
+- El mensaje/pantalla “Te mataron durmiendo” se muestra solo después de confirmar la muerte real.
+- `build.gradle`: se eliminó el incremento automático de versión al compilar, porque modificaba `gradle.properties` y hacía que las compilaciones no fueran reproducibles. La versión se incrementó manualmente a `0.1.16`.
+
+## Límites y observaciones pendientes
+
+- La compilación no pudo ejecutarse en el entorno de auditoría porque Gradle 8.8 no estaba en caché y el entorno no tenía conectividad para descargar `services.gradle.org`. Por eso estos cambios requieren compilarse localmente con JDK 17.
+- La persistencia de Minecraft/Forge no equivale a una transacción fsync por cada operación. El nuevo marcador se conserva hasta confirmar la muerte y reduce la ventana de inconsistencia, pero ningún mod puede garantizar recuperación perfecta ante corte de energía en cualquier instrucción sin un protocolo transaccional más amplio y pruebas específicas.
+- La API de PlayerRevive se invoca por reflexión porque el proyecto no tiene una dependencia de compilación obligatoria. Debe probarse con el JAR exacto de PlayerRevive para Forge 1.20.1 que utiliza el servidor.
+- Curios y BlockZ no se modificaron funcionalmente, conforme a lo pedido. Se conservan sus integraciones actuales.
+
+## Pruebas obligatorias en un servidor de prueba
+
+1. Jugador A se desconecta con objetos; B mata el cuerpo; A reconecta: A debe morir realmente, ver “Te mataron durmiendo” y reaparecer sin recuperar los objetos que el cuerpo soltó.
+2. Repetir con PlayerRevive instalado y sin él.
+3. Repetir con `keepInventory=true` y `keepInventory=false`.
+4. Reiniciar limpiamente el servidor después de matar el cuerpo y antes de la reconexión.
+5. Forzar cierre del servidor después de matar el cuerpo y antes de que A vuelva: comprobar que el marcador se conserva y no se restaura el snapshot antiguo.
+6. Probar un jugador que vuelva a desconectarse durante el reintento.
+7. Confirmar que una muerte normal mientras el jugador está conectado sigue funcionando y no genera cuerpos duplicados.
+
+
+---
+
+# Auditoría y correcciones 0.1.17 (muerte offline + PlayerRevive 2.0.31)
+
+Informe completo, tablas de evidencia y límites en **AUDITORIA_0.1.17.md**. Resumen:
+
+- El puente ya no usa el fallback `forceBledOut + player.kill()` (PlayerRevive cancela ese golpe y deja un estado que
+  provoca `kill()` en cada tick). Si `PlayerReviveServer.kill(Player)` falla se registra la excepción real, se revierte
+  el estado a medias y se reintenta con backoff (1 s .. 60 s, sin límite, sin borrar la marca).
+- "Muerte confirmada" ahora exige salud <= 0 **y** que PlayerRevive ya no marque `bleeding` (antes bastaba `!isAlive()`,
+  que es verdadero aunque `die()` haya fallado porque `kill()` pone la vida a 0 antes).
+- Orden de persistencia: guardar al jugador muerto -> resolver marca -> flush de `SavedData`. La marca se escribe a
+  disco en cuanto el cadáver muere.
+- Sin cadáver nuevo si el dueño vuelve a salir con la muerte pendiente; `try/catch` en todo el flujo de login.
+- Banco de pruebas offline: `src/test/sim/run.sh` (solo JDK). **No sustituye** compilar con Gradle y probar en servidor.
+- **No compilado con Forge ni probado en servidor real** (entorno sin red). Compilar con JDK 17 y seguir la lista
+  de `src/test/manual/TEST_CHECKLIST.md` (sección PlayerRevive) antes de usarlo con datos valiosos.

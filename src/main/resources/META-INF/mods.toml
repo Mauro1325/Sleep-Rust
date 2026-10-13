@@ -31,9 +31,3 @@ mandatory=false
 versionRange="[0,)"
 ordering="NONE"
 side="BOTH"
-[[dependencies.persistentbodies]]
-modId="playerrevive"
-mandatory=false
-versionRange="[0,)"
-ordering="NONE"
-side="BOTH"
