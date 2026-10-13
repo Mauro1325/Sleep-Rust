@@ -1,0 +1,10 @@
+{
+  "container.persistentbodies.corpse": "%s's inventory",
+  "container.persistentbodies.equipment": "Equipment / offhand",
+  "itemGroup.persistentbodies": "Persistent Player Bodies",
+  "message.persistentbodies.restored_from_backup": "Your body could not be found, so your items were restored from the backup copy.",
+  "message.persistentbodies.body_lost": "Your body could not be found and there is no backup copy.",
+  "message.persistentbodies.body_unreachable": "The area around your body could not be loaded. It will be retried the next time you join.",
+  "message.persistentbodies.killed_sleeping": "You were killed in your sleep by %s",
+  "message.persistentbodies.killed_sleeping_unknown": "You were killed in your sleep"
+}

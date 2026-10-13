@@ -1,0 +1,39 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+[[mods]]
+modId="persistentbodies"
+version="${mod_version}"
+displayName="Persistent Player Bodies"
+authors="Project contributors"
+description='''Persistent lootable bodies left behind when players disconnect.'''
+[[dependencies.persistentbodies]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.persistentbodies]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.persistentbodies]]
+modId="curios"
+mandatory=false
+versionRange="[0,)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.persistentbodies]]
+modId="blockz"
+mandatory=false
+versionRange="[0,)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.persistentbodies]]
+modId="playerrevive"
+mandatory=false
+versionRange="[0,)"
+ordering="NONE"
+side="BOTH"

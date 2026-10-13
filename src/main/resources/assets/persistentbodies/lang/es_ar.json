@@ -1,0 +1,9 @@
+{
+  "container.persistentbodies.corpse": "Inventario de %s",
+  "container.persistentbodies.equipment": "Armadura / mano secundaria",
+  "message.persistentbodies.restored_from_backup": "No se encontró tu cuerpo, así que se restauraron tus ítems desde la copia de respaldo.",
+  "message.persistentbodies.body_lost": "No se encontró tu cuerpo y no hay copia de respaldo.",
+  "message.persistentbodies.body_unreachable": "No se pudo cargar la zona de tu cuerpo. Se reintentará la próxima vez que entres.",
+  "message.persistentbodies.killed_sleeping": "Te mataron durmiendo: %s",
+  "message.persistentbodies.killed_sleeping_unknown": "Te mataron durmiendo"
+}
